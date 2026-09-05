@@ -1,0 +1,64 @@
+body {
+    background-color: #f5f7fa;
+}
+
+.boot-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    color: #6c757d;
+    font-size: 1.1rem;
+}
+
+.card {
+    border: none;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.stat-card .value {
+    font-size: 1.75rem;
+    font-weight: 600;
+}
+
+.text-ingreso {
+    color: #198754;
+}
+
+.text-gasto {
+    color: #dc3545;
+}
+
+.progress {
+    height: 0.9rem;
+}
+
+/* Barra con gradiente para el uso del límite de una deuda/tarjeta.
+   El degradé (verde -> amarillo -> rojo) queda fijo en la barra entera;
+   una "máscara" gris cubre la parte que todavía no usaste, así que
+   cuanto más cerca del límite estás, más rojo se ve. */
+.debt-gauge {
+    position: relative;
+    height: 0.9rem;
+    border-radius: 0.375rem;
+    overflow: hidden;
+    background: linear-gradient(90deg, #22c55e 0%, #eab308 55%, #dc3545 100%);
+}
+
+.debt-gauge .mask {
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 100%;
+    background-color: #e9ecef;
+}
+
+.debt-card .saldo {
+    font-size: 1.4rem;
+    font-weight: 600;
+}
+
+.auth-wrap {
+    max-width: 380px;
+    margin: 4rem auto 0;
+}
