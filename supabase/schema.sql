@@ -29,6 +29,11 @@ create table if not exists public.categories (
 
 alter table public.categories enable row level security;
 
+drop policy if exists "categories_select_own" on public.categories;
+drop policy if exists "categories_insert_own" on public.categories;
+drop policy if exists "categories_update_own" on public.categories;
+drop policy if exists "categories_delete_own" on public.categories;
+
 create policy "categories_select_own" on public.categories
     for select using (auth.uid() = user_id);
 create policy "categories_insert_own" on public.categories
@@ -58,6 +63,11 @@ create table if not exists public.transactions (
 
 alter table public.transactions enable row level security;
 
+drop policy if exists "transactions_select_own" on public.transactions;
+drop policy if exists "transactions_insert_own" on public.transactions;
+drop policy if exists "transactions_update_own" on public.transactions;
+drop policy if exists "transactions_delete_own" on public.transactions;
+
 create policy "transactions_select_own" on public.transactions
     for select using (auth.uid() = user_id);
 create policy "transactions_insert_own" on public.transactions
@@ -84,6 +94,11 @@ create table if not exists public.budgets (
 
 alter table public.budgets enable row level security;
 
+drop policy if exists "budgets_select_own" on public.budgets;
+drop policy if exists "budgets_insert_own" on public.budgets;
+drop policy if exists "budgets_update_own" on public.budgets;
+drop policy if exists "budgets_delete_own" on public.budgets;
+
 create policy "budgets_select_own" on public.budgets
     for select using (auth.uid() = user_id);
 create policy "budgets_insert_own" on public.budgets
@@ -107,6 +122,11 @@ create table if not exists public.debts (
 );
 
 alter table public.debts enable row level security;
+
+drop policy if exists "debts_select_own" on public.debts;
+drop policy if exists "debts_insert_own" on public.debts;
+drop policy if exists "debts_update_own" on public.debts;
+drop policy if exists "debts_delete_own" on public.debts;
 
 create policy "debts_select_own" on public.debts
     for select using (auth.uid() = user_id);
@@ -133,6 +153,10 @@ create table if not exists public.debt_movements (
 );
 
 alter table public.debt_movements enable row level security;
+
+drop policy if exists "debt_movements_select_own" on public.debt_movements;
+drop policy if exists "debt_movements_insert_own" on public.debt_movements;
+drop policy if exists "debt_movements_delete_own" on public.debt_movements;
 
 create policy "debt_movements_select_own" on public.debt_movements
     for select using (
