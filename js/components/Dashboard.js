@@ -1,7 +1,8 @@
 // ============================================================================
 // Dashboard: balance del mes, proyección de fin de mes, gráfico de torta de
 // gastos por categoría, gráfico de barras de los últimos 6 meses,
-// presupuestos del mes y últimos movimientos. Equivalente a DashboardView.
+// presupuestos del mes, estadísticas extra y últimos movimientos.
+// Equivalente a DashboardView. Además permite descargar un resumen en CSV.
 // ============================================================================
 
 window.Dashboard = function Dashboard() {
@@ -36,6 +37,7 @@ window.Dashboard = function Dashboard() {
             const monthTxs = await window.Api.transactions.list({ year, month });
             const { ingresos: totalIngresos, gastos: totalGastos } = totales(monthTxs);
             const balance = totalIngresos - totalGastos;
+            const gastosMes = monthTxs.filter((t) => t.type === 'gasto');
 
             const esMesActual = year === today.getFullYear() && month === today.getMonth() + 1;
             let proyeccion = null;
@@ -49,14 +51,76 @@ window.Dashboard = function Dashboard() {
                 };
             }
 
-            // Gastos por categoría (torta)
+            // Gastos por categoría (torta) — también sirve para "categoría con más gasto"
             const porCategoria = {};
-            monthTxs.filter((t) => t.type === 'gasto').forEach((t) => {
+            gastosMes.forEach((t) => {
                 const label = t.category ? t.category.name : 'Sin categoría';
                 porCategoria[label] = (porCategoria[label] || 0) + Number(t.amount);
             });
             const catLabels = Object.keys(porCategoria);
             const catValues = catLabels.map((k) => porCategoria[k]);
+
+            let categoriaTop = null;
+            catLabels.forEach((label, i) => {
+                if (!categoriaTop || catValues[i] > categoriaTop.total) {
+                    categoriaTop = { nombre: label, total: catValues[i] };
+                }
+            });
+
+            // Gasto más recurrente: la categoría con más CANTIDAD de movimientos
+            // (no la que más plata se llevó, sino la que se repite más seguido).
+            const conteoPorCategoria = {};
+            gastosMes.forEach((t) => {
+                const label = t.category ? t.category.name : 'Sin categoría';
+                conteoPorCategoria[label] = (conteoPorCategoria[label] || 0) + 1;
+            });
+            let masRecurrente = null;
+            Object.keys(conteoPorCategoria).forEach((label) => {
+                if (!masRecurrente || conteoPorCategoria[label] > masRecurrente.veces) {
+                    masRecurrente = { nombre: label, veces: conteoPorCategoria[label] };
+                }
+            });
+
+            // Tipo de pago más usado (por cantidad de veces), entre los gastos.
+            const conteoPorPago = {};
+            const totalPorPago = {};
+            gastosMes.forEach((t) => {
+                const key = t.payment_type || '';
+                conteoPorPago[key] = (conteoPorPago[key] || 0) + 1;
+                totalPorPago[key] = (totalPorPago[key] || 0) + Number(t.amount);
+            });
+            let pagoMasUsado = null;
+            Object.keys(conteoPorPago).forEach((key) => {
+                if (!pagoMasUsado || conteoPorPago[key] > pagoMasUsado.veces) {
+                    pagoMasUsado = { tipo: key, veces: conteoPorPago[key], total: totalPorPago[key] };
+                }
+            });
+
+            // Necesario vs. antojo, entre los gastos.
+            let necesario = 0, antojo = 0, sinClasificar = 0;
+            gastosMes.forEach((t) => {
+                if (t.necessity === 'necesario') necesario += Number(t.amount);
+                else if (t.necessity === 'antojo') antojo += Number(t.amount);
+                else sinClasificar += Number(t.amount);
+            });
+            const necesarioAntojo = {
+                necesario, antojo, sinClasificar,
+                pctNecesario: totalGastos ? (necesario / totalGastos) * 100 : 0,
+                pctAntojo: totalGastos ? (antojo / totalGastos) * 100 : 0,
+            };
+
+            // Comparación con el mes anterior.
+            let prevY = year, prevM = month - 1;
+            if (prevM === 0) { prevM = 12; prevY -= 1; }
+            const prevTxs = await window.Api.transactions.list({ year: prevY, month: prevM });
+            const prevTotales = totales(prevTxs);
+            const diffGastos = totalGastos - prevTotales.gastos;
+            const comparacionMesAnterior = {
+                label: `${window.Utils.MESES_ES[prevM]} ${prevY}`,
+                gastos: prevTotales.gastos,
+                diffGastos,
+                pctGastos: prevTotales.gastos ? (diffGastos / prevTotales.gastos) * 100 : null,
+            };
 
             // Últimos 6 meses (barras)
             let y = year, m = month;
@@ -82,7 +146,7 @@ window.Dashboard = function Dashboard() {
             ]);
             const presupuestosData = budgets.map((b) => {
                 const gastado = window.Utils.sum(
-                    monthTxs.filter((t) => t.type === 'gasto' && t.category_id === b.category_id),
+                    gastosMes.filter((t) => t.category_id === b.category_id),
                     (t) => t.amount
                 );
                 const porcentaje = b.amount ? Math.min((gastado / b.amount) * 100, 100) : 0;
@@ -98,6 +162,8 @@ window.Dashboard = function Dashboard() {
             setData({
                 totalIngresos, totalGastos, balance, proyeccion, esMesActual,
                 catLabels, catValues, historial, presupuestosData, ultimosMovimientos,
+                categoriaTop, masRecurrente, pagoMasUsado, necesarioAntojo, comparacionMesAnterior,
+                movimientosMes: monthTxs,
             });
         } catch (err) {
             setError(err.message);
@@ -155,6 +221,85 @@ window.Dashboard = function Dashboard() {
         if (month === 12) { setYear(year + 1); setMonth(1); } else { setMonth(month + 1); }
     };
 
+    // --------------------------------------------------------------------
+    // Descarga del resumen del mes en CSV (se abre bien en Excel/Sheets).
+    // --------------------------------------------------------------------
+    const csvField = (value) => {
+        const s = String(value ?? '');
+        if (/[;"\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+        return s;
+    };
+    const csvRow = (...campos) => campos.map(csvField).join(';');
+
+    const descargarResumenCSV = () => {
+        if (!data) return;
+        const num = (n) => Number(n || 0).toFixed(2);
+        const nombreMes = `${window.Utils.MESES_ES[month]} ${year}`;
+        const filas = [];
+
+        filas.push(csvRow(`Resumen de ${nombreMes}`));
+        filas.push('');
+        filas.push(csvRow('Ingresos del mes', num(data.totalIngresos)));
+        filas.push(csvRow('Gastos del mes', num(data.totalGastos)));
+        filas.push(csvRow('Balance del mes', num(data.balance)));
+        filas.push('');
+
+        filas.push(csvRow('Comparación con el mes anterior'));
+        filas.push(csvRow('Mes anterior', data.comparacionMesAnterior.label));
+        filas.push(csvRow('Gastos mes anterior', num(data.comparacionMesAnterior.gastos)));
+        filas.push(csvRow(
+            'Diferencia en gastos',
+            `${data.comparacionMesAnterior.diffGastos >= 0 ? '+' : ''}${num(data.comparacionMesAnterior.diffGastos)}`
+        ));
+        filas.push(csvRow(
+            'Variación %',
+            data.comparacionMesAnterior.pctGastos === null ? 'N/D' : `${data.comparacionMesAnterior.pctGastos.toFixed(1)}%`
+        ));
+        filas.push('');
+
+        filas.push(csvRow('Categoría con más gasto', data.categoriaTop ? data.categoriaTop.nombre : '—',
+            data.categoriaTop ? num(data.categoriaTop.total) : ''));
+        filas.push(csvRow('Gasto más recurrente (categoría)', data.masRecurrente ? data.masRecurrente.nombre : '—',
+            data.masRecurrente ? `${data.masRecurrente.veces} veces` : ''));
+        filas.push(csvRow('Tipo de pago más usado',
+            data.pagoMasUsado ? window.Utils.labelFor(window.Utils.PAYMENT_TYPE_CHOICES, data.pagoMasUsado.tipo) : '—',
+            data.pagoMasUsado ? `${data.pagoMasUsado.veces} veces, $${num(data.pagoMasUsado.total)}` : ''));
+        filas.push('');
+
+        filas.push(csvRow('Necesario vs. antojo'));
+        filas.push(csvRow('Necesario', num(data.necesarioAntojo.necesario), `${data.necesarioAntojo.pctNecesario.toFixed(1)}%`));
+        filas.push(csvRow('Antojo', num(data.necesarioAntojo.antojo), `${data.necesarioAntojo.pctAntojo.toFixed(1)}%`));
+        if (data.necesarioAntojo.sinClasificar > 0) {
+            filas.push(csvRow('Sin clasificar', num(data.necesarioAntojo.sinClasificar)));
+        }
+        filas.push('');
+
+        filas.push(csvRow('Movimientos del mes'));
+        filas.push(csvRow('Fecha', 'Tipo', 'Categoría', 'Tipo de pago', 'Necesidad', 'Descripción', 'Monto'));
+        data.movimientosMes.forEach((t) => {
+            filas.push(csvRow(
+                window.Utils.formatDate(t.date),
+                window.Utils.labelFor(window.Utils.TIPO_CHOICES, t.type),
+                t.category ? t.category.name : 'Sin categoría',
+                window.Utils.labelFor(window.Utils.PAYMENT_TYPE_CHOICES, t.payment_type),
+                window.Utils.labelFor(window.Utils.NECESSITY_CHOICES, t.necessity),
+                t.description || '',
+                num(t.amount)
+            ));
+        });
+
+        const csvContent = '﻿' + filas.join('\r\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `resumen_${year}_${String(month).padStart(2, '0')}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
     return (
         <div>
             <div className="d-flex justify-content-between align-items-center mb-4">
@@ -172,6 +317,12 @@ window.Dashboard = function Dashboard() {
                 <p className="text-muted">Cargando…</p>
             ) : (
                 <>
+                    <div className="d-flex justify-content-end mb-3">
+                        <button className="btn btn-outline-primary btn-sm" onClick={descargarResumenCSV}>
+                            <i className="bi bi-download"></i> Descargar resumen (.csv)
+                        </button>
+                    </div>
+
                     <div className="row g-3 mb-4">
                         <div className="col-md-4">
                             <div className="card stat-card p-3">
@@ -219,6 +370,63 @@ window.Dashboard = function Dashboard() {
                             </div>
                         </div>
                     )}
+
+                    <div className="card p-3 mb-4">
+                        <h5><i className="bi bi-bar-chart-line"></i> Estadísticas del mes</h5>
+                        <div className="row g-3 mt-1">
+                            <div className="col-md-6">
+                                <div className="text-muted small">Categoría con más gasto</div>
+                                <div>
+                                    {data.categoriaTop ? (
+                                        <>{data.categoriaTop.nombre} — <strong>{window.Utils.formatMoney(data.categoriaTop.total)}</strong></>
+                                    ) : '—'}
+                                </div>
+                            </div>
+                            <div className="col-md-6">
+                                <div className="text-muted small">Gasto más recurrente</div>
+                                <div>
+                                    {data.masRecurrente ? (
+                                        <>{data.masRecurrente.nombre} — <strong>{data.masRecurrente.veces} veces</strong></>
+                                    ) : '—'}
+                                </div>
+                            </div>
+                            <div className="col-md-6">
+                                <div className="text-muted small">Tipo de pago más usado</div>
+                                <div>
+                                    {data.pagoMasUsado ? (
+                                        <>
+                                            {window.Utils.labelFor(window.Utils.PAYMENT_TYPE_CHOICES, data.pagoMasUsado.tipo)} —{' '}
+                                            <strong>{data.pagoMasUsado.veces} veces</strong> ({window.Utils.formatMoney(data.pagoMasUsado.total)})
+                                        </>
+                                    ) : '—'}
+                                </div>
+                            </div>
+                            <div className="col-md-6">
+                                <div className="text-muted small">Vs. {data.comparacionMesAnterior.label}</div>
+                                <div className={data.comparacionMesAnterior.diffGastos > 0 ? 'text-gasto' : 'text-ingreso'}>
+                                    Gastaste{' '}
+                                    <strong>{window.Utils.formatMoney(Math.abs(data.comparacionMesAnterior.diffGastos))}</strong>
+                                    {data.comparacionMesAnterior.diffGastos >= 0 ? ' más' : ' menos'}
+                                    {data.comparacionMesAnterior.pctGastos !== null && (
+                                        <> ({data.comparacionMesAnterior.pctGastos >= 0 ? '+' : ''}{data.comparacionMesAnterior.pctGastos.toFixed(1)}%)</>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="col-md-12">
+                                <div className="text-muted small mb-1">
+                                    Necesario vs. antojo — {data.necesarioAntojo.pctNecesario.toFixed(0)}% / {data.necesarioAntojo.pctAntojo.toFixed(0)}%
+                                </div>
+                                <div className="progress">
+                                    <div className="progress-bar bg-success" style={{ width: `${data.necesarioAntojo.pctNecesario.toFixed(1)}%` }}>
+                                        Necesario {window.Utils.formatMoney(data.necesarioAntojo.necesario)}
+                                    </div>
+                                    <div className="progress-bar bg-warning" style={{ width: `${data.necesarioAntojo.pctAntojo.toFixed(1)}%` }}>
+                                        Antojo {window.Utils.formatMoney(data.necesarioAntojo.antojo)}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
                     <div className="row g-3 mb-4">
                         <div className="col-md-6">
