@@ -73,4 +73,27 @@ window.Utils = {
     sum(items, pick) {
         return items.reduce((acc, item) => acc + Number(pick(item) || 0), 0);
     },
+
+    // --- Exportar a CSV (se abre bien en Excel/Sheets) -----------------
+    csvField(value) {
+        const s = String(value ?? '');
+        if (/[;"\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+        return s;
+    },
+    csvRow(...campos) {
+        return campos.map((c) => this.csvField(c)).join(';');
+    },
+    // filas: array de strings, cada una ya armada con csvRow() (o texto suelto).
+    downloadCSV(filename, filas) {
+        const csvContent = '﻿' + filas.join('\r\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    },
 };

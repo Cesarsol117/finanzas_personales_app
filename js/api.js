@@ -64,6 +64,9 @@ window.Api = {
 
     transactions: {
         // filtros opcionales: { type, categoryId, year, month }
+        // Con year + month: filtra ese mes exacto. Con solo year: filtra el
+        // año completo (los 12 meses) — útil para el resumen anual y para
+        // "ver todo este año" en la lista de movimientos.
         async list(filters = {}) {
             let query = window.db
                 .from('transactions')
@@ -78,6 +81,8 @@ window.Api = {
                 const lastDay = Utils.daysInMonth(filters.year, filters.month);
                 const last = `${filters.year}-${String(filters.month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
                 query = query.gte('date', first).lte('date', last);
+            } else if (filters.year) {
+                query = query.gte('date', `${filters.year}-01-01`).lte('date', `${filters.year}-12-31`);
             }
             const { data, error } = await query;
             if (error) throw error;

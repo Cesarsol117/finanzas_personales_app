@@ -1,24 +1,34 @@
 // ============================================================================
 // CRUD de movimientos (ingresos/gastos), con los campos extra de tipo de
-// pago y necesario/antojo, y filtros por tipo/categoría/mes.
+// pago y necesario/antojo, filtros por tipo/categoría/mes, y descarga en
+// CSV de lo que esté filtrado en pantalla.
 // ============================================================================
 
 window.Transactions = function Transactions({ openId }) {
     const { useState, useEffect } = React;
     const today = window.Utils.todayISO();
+    const ahora = new Date();
 
     const emptyForm = {
         type: 'gasto', category_id: '', payment_type: '', necessity: '',
         amount: '', date: today, description: '',
     };
 
+    // Por defecto se muestra el mes actual (no la lista completa) — se
+    // puede pasar a "Todos" en cualquiera de los dos selects.
     const [items, setItems] = useState([]);
     const [categories, setCategories] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-    const [filters, setFilters] = useState({ type: '', categoryId: '' });
+    const [filters, setFilters] = useState({
+        type: '', categoryId: '',
+        year: String(ahora.getFullYear()), month: String(ahora.getMonth() + 1),
+    });
     const [editing, setEditing] = useState(null);
     const [form, setForm] = useState(emptyForm);
+
+    const aniosDisponibles = [];
+    for (let a = ahora.getFullYear() + 1; a >= ahora.getFullYear() - 5; a--) aniosDisponibles.push(a);
 
     const loadAll = async () => {
         setLoading(true);
@@ -29,6 +39,8 @@ window.Transactions = function Transactions({ openId }) {
                 window.Api.transactions.list({
                     type: filters.type || undefined,
                     categoryId: filters.categoryId || undefined,
+                    year: filters.year || undefined,
+                    month: filters.month || undefined,
                 }),
             ]);
             setCategories(cats);
@@ -40,7 +52,7 @@ window.Transactions = function Transactions({ openId }) {
         }
     };
 
-    useEffect(() => { loadAll(); }, [filters.type, filters.categoryId]);
+    useEffect(() => { loadAll(); }, [filters.type, filters.categoryId, filters.year, filters.month]);
 
     // Si App nos pidió abrir el formulario de "nuevo movimiento" (link del navbar).
     useEffect(() => {
@@ -94,6 +106,41 @@ window.Transactions = function Transactions({ openId }) {
 
     const categoriasDelTipo = categories.filter((c) => c.type === form.type);
 
+    const descargarCSV = () => {
+        if (items.length === 0) return;
+        const ingresos = window.Utils.sum(items.filter((t) => t.type === 'ingreso'), (t) => t.amount);
+        const gastos = window.Utils.sum(items.filter((t) => t.type === 'gasto'), (t) => t.amount);
+        const num = (n) => Number(n || 0).toFixed(2);
+
+        const nombreMes = filters.month ? window.Utils.MESES_ES[Number(filters.month)] : 'Todos los meses';
+        const nombreAnio = filters.year || 'todos los años';
+
+        const filas = [];
+        filas.push(window.Utils.csvRow(`Movimientos — ${nombreMes} ${nombreAnio}`));
+        filas.push('');
+        filas.push(window.Utils.csvRow('Ingresos', num(ingresos)));
+        filas.push(window.Utils.csvRow('Gastos', num(gastos)));
+        filas.push(window.Utils.csvRow('Balance', num(ingresos - gastos)));
+        filas.push('');
+        filas.push(window.Utils.csvRow('Fecha', 'Tipo', 'Categoría', 'Tipo de pago', 'Necesidad', 'Descripción', 'Monto'));
+        items.forEach((t) => {
+            filas.push(window.Utils.csvRow(
+                window.Utils.formatDate(t.date),
+                window.Utils.labelFor(window.Utils.TIPO_CHOICES, t.type),
+                t.category ? t.category.name : 'Sin categoría',
+                window.Utils.labelFor(window.Utils.PAYMENT_TYPE_CHOICES, t.payment_type),
+                window.Utils.labelFor(window.Utils.NECESSITY_CHOICES, t.necessity),
+                t.description || '',
+                num(t.amount)
+            ));
+        });
+
+        const sufijo = filters.year
+            ? `${filters.year}${filters.month ? '_' + String(filters.month).padStart(2, '0') : ''}`
+            : 'todos';
+        window.Utils.downloadCSV(`movimientos_${sufijo}.csv`, filas);
+    };
+
     return (
         <div>
             <div className="d-flex justify-content-between align-items-center mb-3">
@@ -107,7 +154,27 @@ window.Transactions = function Transactions({ openId }) {
 
             <div className="card p-3 mb-3">
                 <div className="row g-2">
-                    <div className="col-md-4">
+                    <div className="col-md-3">
+                        <label className="form-label small text-muted">Año</label>
+                        <select className="form-select" value={filters.year}
+                            onChange={(e) => setFilters({ ...filters, year: e.target.value })}>
+                            <option value="">Todos</option>
+                            {aniosDisponibles.map((a) => (
+                                <option key={a} value={a}>{a}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="col-md-3">
+                        <label className="form-label small text-muted">Mes</label>
+                        <select className="form-select" value={filters.month}
+                            onChange={(e) => setFilters({ ...filters, month: e.target.value })}>
+                            <option value="">Todos</option>
+                            {window.Utils.MESES_ES.slice(1).map((nombre, i) => (
+                                <option key={i + 1} value={i + 1}>{nombre}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="col-md-3">
                         <label className="form-label small text-muted">Tipo</label>
                         <select className="form-select" value={filters.type}
                             onChange={(e) => setFilters({ ...filters, type: e.target.value })}>
@@ -117,7 +184,7 @@ window.Transactions = function Transactions({ openId }) {
                             ))}
                         </select>
                     </div>
-                    <div className="col-md-4">
+                    <div className="col-md-3">
                         <label className="form-label small text-muted">Categoría</label>
                         <select className="form-select" value={filters.categoryId}
                             onChange={(e) => setFilters({ ...filters, categoryId: e.target.value })}>
@@ -127,6 +194,11 @@ window.Transactions = function Transactions({ openId }) {
                             ))}
                         </select>
                     </div>
+                </div>
+                <div className="d-flex justify-content-end mt-3">
+                    <button className="btn btn-outline-primary btn-sm" onClick={descargarCSV} disabled={items.length === 0}>
+                        <i className="bi bi-download"></i> Descargar CSV de este filtro
+                    </button>
                 </div>
             </div>
 

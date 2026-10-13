@@ -1,8 +1,8 @@
 // ============================================================================
-// Dashboard: balance del mes, proyección de fin de mes, gráfico de torta de
-// gastos por categoría, gráfico de barras de los últimos 6 meses,
-// presupuestos del mes, estadísticas extra y últimos movimientos.
-// Equivalente a DashboardView. Además permite descargar un resumen en CSV.
+// Dashboard: balance del mes (con aviso si el saldo está en rojo), gráfico
+// de gastos por categoría, gasto día a día del mes, últimos 6 meses,
+// presupuestos del mes, estadísticas extra y un resumen anual.
+// Equivalente a DashboardView.
 // ============================================================================
 
 window.Dashboard = function Dashboard() {
@@ -17,8 +17,10 @@ window.Dashboard = function Dashboard() {
 
     const chartCatRef = useRef(null);
     const chartHistRef = useRef(null);
+    const chartDiarioRef = useRef(null);
     const chartCatInstance = useRef(null);
     const chartHistInstance = useRef(null);
+    const chartDiarioInstance = useRef(null);
 
     const totales = (txs) => {
         let ingresos = 0, gastos = 0;
@@ -39,17 +41,12 @@ window.Dashboard = function Dashboard() {
             const balance = totalIngresos - totalGastos;
             const gastosMes = monthTxs.filter((t) => t.type === 'gasto');
 
-            const esMesActual = year === today.getFullYear() && month === today.getMonth() + 1;
-            let proyeccion = null;
-            if (esMesActual) {
-                const diasTranscurridos = today.getDate();
-                const proyIngresos = (totalIngresos / diasTranscurridos) * lastDay;
-                const proyGastos = (totalGastos / diasTranscurridos) * lastDay;
-                proyeccion = {
-                    ingresos: proyIngresos, gastos: proyGastos, balance: proyIngresos - proyGastos,
-                    diasTranscurridos, diasTotales: lastDay,
-                };
-            }
+            // Gasto día a día del mes (para la barra diaria).
+            const gastoPorDia = new Array(lastDay).fill(0);
+            gastosMes.forEach((t) => {
+                const dia = Number(t.date.split('-')[2]);
+                if (dia >= 1 && dia <= lastDay) gastoPorDia[dia - 1] += Number(t.amount);
+            });
 
             // Gastos por categoría (torta) — también sirve para "categoría con más gasto"
             const porCategoria = {};
@@ -139,6 +136,13 @@ window.Dashboard = function Dashboard() {
                 })
             );
 
+            // Resumen anual (todo el año que está mostrando el mes actual).
+            const yearTxs = await window.Api.transactions.list({ year });
+            const anual = totales(yearTxs);
+            const resumenAnual = {
+                ingresos: anual.ingresos, gastos: anual.gastos, balance: anual.ingresos - anual.gastos,
+            };
+
             // Presupuestos del mes
             const [budgets, categories] = await Promise.all([
                 window.Api.budgets.list({ year, month }),
@@ -157,13 +161,11 @@ window.Dashboard = function Dashboard() {
                 };
             });
 
-            const ultimosMovimientos = monthTxs.slice(0, 5);
-
             setData({
-                totalIngresos, totalGastos, balance, proyeccion, esMesActual,
-                catLabels, catValues, historial, presupuestosData, ultimosMovimientos,
+                totalIngresos, totalGastos, balance,
+                catLabels, catValues, gastoPorDia, lastDay, historial, presupuestosData,
                 categoriaTop, masRecurrente, pagoMasUsado, necesarioAntojo, comparacionMesAnterior,
-                movimientosMes: monthTxs,
+                resumenAnual,
             });
         } catch (err) {
             setError(err.message);
@@ -179,6 +181,7 @@ window.Dashboard = function Dashboard() {
 
         if (chartCatInstance.current) { chartCatInstance.current.destroy(); chartCatInstance.current = null; }
         if (chartHistInstance.current) { chartHistInstance.current.destroy(); chartHistInstance.current = null; }
+        if (chartDiarioInstance.current) { chartDiarioInstance.current.destroy(); chartDiarioInstance.current = null; }
 
         if (data.catLabels.length > 0 && chartCatRef.current) {
             chartCatInstance.current = new Chart(chartCatRef.current, {
@@ -208,9 +211,25 @@ window.Dashboard = function Dashboard() {
             });
         }
 
+        if (chartDiarioRef.current) {
+            chartDiarioInstance.current = new Chart(chartDiarioRef.current, {
+                type: 'bar',
+                data: {
+                    labels: data.gastoPorDia.map((_, i) => String(i + 1)),
+                    datasets: [{ label: 'Gasto del día', data: data.gastoPorDia, backgroundColor: '#e74a3b' }],
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: { x: { title: { display: true, text: 'Día del mes' } } },
+                },
+            });
+        }
+
         return () => {
             if (chartCatInstance.current) chartCatInstance.current.destroy();
             if (chartHistInstance.current) chartHistInstance.current.destroy();
+            if (chartDiarioInstance.current) chartDiarioInstance.current.destroy();
         };
     }, [data, loading]);
 
@@ -219,85 +238,6 @@ window.Dashboard = function Dashboard() {
     };
     const nextMonth = () => {
         if (month === 12) { setYear(year + 1); setMonth(1); } else { setMonth(month + 1); }
-    };
-
-    // --------------------------------------------------------------------
-    // Descarga del resumen del mes en CSV (se abre bien en Excel/Sheets).
-    // --------------------------------------------------------------------
-    const csvField = (value) => {
-        const s = String(value ?? '');
-        if (/[;"\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-        return s;
-    };
-    const csvRow = (...campos) => campos.map(csvField).join(';');
-
-    const descargarResumenCSV = () => {
-        if (!data) return;
-        const num = (n) => Number(n || 0).toFixed(2);
-        const nombreMes = `${window.Utils.MESES_ES[month]} ${year}`;
-        const filas = [];
-
-        filas.push(csvRow(`Resumen de ${nombreMes}`));
-        filas.push('');
-        filas.push(csvRow('Ingresos del mes', num(data.totalIngresos)));
-        filas.push(csvRow('Gastos del mes', num(data.totalGastos)));
-        filas.push(csvRow('Balance del mes', num(data.balance)));
-        filas.push('');
-
-        filas.push(csvRow('Comparación con el mes anterior'));
-        filas.push(csvRow('Mes anterior', data.comparacionMesAnterior.label));
-        filas.push(csvRow('Gastos mes anterior', num(data.comparacionMesAnterior.gastos)));
-        filas.push(csvRow(
-            'Diferencia en gastos',
-            `${data.comparacionMesAnterior.diffGastos >= 0 ? '+' : ''}${num(data.comparacionMesAnterior.diffGastos)}`
-        ));
-        filas.push(csvRow(
-            'Variación %',
-            data.comparacionMesAnterior.pctGastos === null ? 'N/D' : `${data.comparacionMesAnterior.pctGastos.toFixed(1)}%`
-        ));
-        filas.push('');
-
-        filas.push(csvRow('Categoría con más gasto', data.categoriaTop ? data.categoriaTop.nombre : '—',
-            data.categoriaTop ? num(data.categoriaTop.total) : ''));
-        filas.push(csvRow('Gasto más recurrente (categoría)', data.masRecurrente ? data.masRecurrente.nombre : '—',
-            data.masRecurrente ? `${data.masRecurrente.veces} veces` : ''));
-        filas.push(csvRow('Tipo de pago más usado',
-            data.pagoMasUsado ? window.Utils.labelFor(window.Utils.PAYMENT_TYPE_CHOICES, data.pagoMasUsado.tipo) : '—',
-            data.pagoMasUsado ? `${data.pagoMasUsado.veces} veces, $${num(data.pagoMasUsado.total)}` : ''));
-        filas.push('');
-
-        filas.push(csvRow('Necesario vs. antojo'));
-        filas.push(csvRow('Necesario', num(data.necesarioAntojo.necesario), `${data.necesarioAntojo.pctNecesario.toFixed(1)}%`));
-        filas.push(csvRow('Antojo', num(data.necesarioAntojo.antojo), `${data.necesarioAntojo.pctAntojo.toFixed(1)}%`));
-        if (data.necesarioAntojo.sinClasificar > 0) {
-            filas.push(csvRow('Sin clasificar', num(data.necesarioAntojo.sinClasificar)));
-        }
-        filas.push('');
-
-        filas.push(csvRow('Movimientos del mes'));
-        filas.push(csvRow('Fecha', 'Tipo', 'Categoría', 'Tipo de pago', 'Necesidad', 'Descripción', 'Monto'));
-        data.movimientosMes.forEach((t) => {
-            filas.push(csvRow(
-                window.Utils.formatDate(t.date),
-                window.Utils.labelFor(window.Utils.TIPO_CHOICES, t.type),
-                t.category ? t.category.name : 'Sin categoría',
-                window.Utils.labelFor(window.Utils.PAYMENT_TYPE_CHOICES, t.payment_type),
-                window.Utils.labelFor(window.Utils.NECESSITY_CHOICES, t.necessity),
-                t.description || '',
-                num(t.amount)
-            ));
-        });
-
-        const csvContent = '﻿' + filas.join('\r\n');
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `resumen_${year}_${String(month).padStart(2, '0')}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
     };
 
     return (
@@ -317,10 +257,15 @@ window.Dashboard = function Dashboard() {
                 <p className="text-muted">Cargando…</p>
             ) : (
                 <>
-                    <div className="d-flex justify-content-end mb-3">
-                        <button className="btn btn-outline-primary btn-sm" onClick={descargarResumenCSV}>
-                            <i className="bi bi-download"></i> Descargar resumen (.csv)
-                        </button>
+                    <div className={`alert ${data.balance >= 0 ? 'alert-success' : 'alert-danger'} d-flex align-items-center mb-4`}>
+                        <span className="fs-5 me-2">{data.balance >= 0 ? '🟢' : '🔴'}</span>
+                        <span>
+                            {data.balance >= 0 ? (
+                                <>Vas bien este mes: te sobran <strong>{window.Utils.formatMoney(data.balance)}</strong>.</>
+                            ) : (
+                                <>Vas con saldo en rojo este mes: gastaste <strong>{window.Utils.formatMoney(Math.abs(data.balance))}</strong> más de lo que ingresó.</>
+                            )}
+                        </span>
                     </div>
 
                     <div className="row g-3 mb-4">
@@ -345,31 +290,6 @@ window.Dashboard = function Dashboard() {
                             </div>
                         </div>
                     </div>
-
-                    {data.proyeccion && (
-                        <div className="card p-3 mb-4">
-                            <h5><i className="bi bi-graph-up-arrow"></i> Proyección de fin de mes</h5>
-                            <p className="text-muted mb-2">
-                                Basada en tu ritmo de los primeros {data.proyeccion.diasTranscurridos} de {data.proyeccion.diasTotales} días del mes.
-                            </p>
-                            <div className="row text-center">
-                                <div className="col-md-4">
-                                    <div className="text-muted">Ingresos proyectados</div>
-                                    <div className="fs-5 text-ingreso">{window.Utils.formatMoney(data.proyeccion.ingresos)}</div>
-                                </div>
-                                <div className="col-md-4">
-                                    <div className="text-muted">Gastos proyectados</div>
-                                    <div className="fs-5 text-gasto">{window.Utils.formatMoney(data.proyeccion.gastos)}</div>
-                                </div>
-                                <div className="col-md-4">
-                                    <div className="text-muted">Balance proyectado</div>
-                                    <div className={`fs-5 ${data.proyeccion.balance >= 0 ? 'text-ingreso' : 'text-gasto'}`}>
-                                        {window.Utils.formatMoney(data.proyeccion.balance)}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
 
                     <div className="card p-3 mb-4">
                         <h5><i className="bi bi-bar-chart-line"></i> Estadísticas del mes</h5>
@@ -447,6 +367,11 @@ window.Dashboard = function Dashboard() {
                         </div>
                     </div>
 
+                    <div className="card p-3 mb-4">
+                        <h5>Gasto día a día del mes</h5>
+                        <canvas ref={chartDiarioRef} height="120"></canvas>
+                    </div>
+
                     {data.presupuestosData.length > 0 && (
                         <div className="card p-3 mb-4">
                             <h5><i className="bi bi-piggy-bank"></i> Presupuestos del mes</h5>
@@ -468,34 +393,33 @@ window.Dashboard = function Dashboard() {
                     )}
 
                     <div className="card p-3">
-                        <div className="d-flex justify-content-between align-items-center mb-2">
-                            <h5 className="mb-0">Últimos movimientos</h5>
-                            <a href="#/transactions" className="btn btn-sm btn-outline-primary">Ver todos</a>
+                        <h5><i className="bi bi-calendar3-range"></i> Resumen anual — {year}</h5>
+                        <div className={`alert ${data.resumenAnual.balance >= 0 ? 'alert-success' : 'alert-danger'} d-flex align-items-center mt-2 mb-3`}>
+                            <span className="fs-5 me-2">{data.resumenAnual.balance >= 0 ? '🟢' : '🔴'}</span>
+                            <span>
+                                {data.resumenAnual.balance >= 0 ? (
+                                    <>En lo que va de {year} vas con saldo positivo: <strong>{window.Utils.formatMoney(data.resumenAnual.balance)}</strong>.</>
+                                ) : (
+                                    <>En lo que va de {year} vas con saldo en rojo: <strong>{window.Utils.formatMoney(Math.abs(data.resumenAnual.balance))}</strong> de más gastado.</>
+                                )}
+                            </span>
                         </div>
-                        {data.ultimosMovimientos.length > 0 ? (
-                            <table className="table table-sm">
-                                <thead><tr><th>Fecha</th><th>Tipo</th><th>Categoría</th><th>Descripción</th><th className="text-end">Monto</th></tr></thead>
-                                <tbody>
-                                    {data.ultimosMovimientos.map((t) => (
-                                        <tr key={t.id}>
-                                            <td>{window.Utils.formatDate(t.date)}</td>
-                                            <td>
-                                                {t.type === 'ingreso'
-                                                    ? <span className="text-ingreso">Ingreso</span>
-                                                    : <span className="text-gasto">Gasto</span>}
-                                            </td>
-                                            <td>{t.category ? t.category.name : '—'}</td>
-                                            <td>{t.description || '—'}</td>
-                                            <td className="text-end">{window.Utils.formatMoney(t.amount)}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        ) : (
-                            <p className="text-muted mb-0">
-                                No hay movimientos este mes todavía. <a href="#/transactions/new">Agregá el primero</a>.
-                            </p>
-                        )}
+                        <div className="row g-3">
+                            <div className="col-md-4">
+                                <div className="text-muted">Ingresos del año</div>
+                                <div className="fs-5 text-ingreso">{window.Utils.formatMoney(data.resumenAnual.ingresos)}</div>
+                            </div>
+                            <div className="col-md-4">
+                                <div className="text-muted">Gastos del año</div>
+                                <div className="fs-5 text-gasto">{window.Utils.formatMoney(data.resumenAnual.gastos)}</div>
+                            </div>
+                            <div className="col-md-4">
+                                <div className="text-muted">Balance del año</div>
+                                <div className={`fs-5 ${data.resumenAnual.balance >= 0 ? 'text-ingreso' : 'text-gasto'}`}>
+                                    {window.Utils.formatMoney(data.resumenAnual.balance)}
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </>
             )}
